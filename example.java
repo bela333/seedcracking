@@ -41,7 +41,7 @@ public class example {
 
     System.out.println(chunkseed + " " + realchunkseed + " " + (chunkseed == realchunkseed));
     System.out.println(chunkX * var7);
-    System.out.println(chunkseed);
+    System.out.println(realchunkseed);
 
   }
 }
