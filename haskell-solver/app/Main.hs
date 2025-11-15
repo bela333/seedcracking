@@ -84,7 +84,8 @@ addend :: MaskedBitVec
 addend = bitVecVal 0xB
 
 -- Configuration
--- seed = bitVecVal 123123123123123
+
+
 
 chunkX = bitVecVal 7
 
