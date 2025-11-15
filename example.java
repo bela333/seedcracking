@@ -8,7 +8,7 @@ public class example {
 
   public static void main(String args[]) {
     Random rand = new Random();
-    long chunkX = 7;
+    long chunkX = 15;
     long chunkZ = 16;
 
     long seed = 123123123123123L;
@@ -40,7 +40,7 @@ public class example {
     long realchunkseed = ((long) chunkX * randx + (long) chunkZ * randz ^ seed) & mask;
 
     System.out.println(chunkseed + " " + realchunkseed + " " + (chunkseed == realchunkseed));
-    System.out.println(chunkX * var7);
+    System.out.println(var9_);
     System.out.println(realchunkseed);
 
   }

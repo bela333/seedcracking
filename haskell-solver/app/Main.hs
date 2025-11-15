@@ -76,7 +76,6 @@ bitvecTruncate x to n =
     else
       x n
 
-
 multiplier :: MaskedBitVec
 multiplier = bitVecVal 0x5DEECE66D
 
@@ -85,43 +84,48 @@ addend = bitVecVal 0xB
 
 -- Configuration
 
-
-
-chunkX = bitVecVal 7
-
-chunkZ = bitVecVal 16
-
-seedXsigned = False
-
-seedZsigned = False
+data Configuration = Configuration
+  { chunkX :: MaskedBitVec,
+    chunkZ :: MaskedBitVec,
+    seedXsigned :: Bool,
+    seedZsigned :: Bool
+  }
 
 -- Configuration end
 
-seedToChunkseed :: MaskedBitVec -> MaskedBitVec
-seedToChunkseed seed = chunkseed
+seedStep :: MaskedBitVec -> MaskedBitVec
+seedStep seed = bitvecAdd (bitvecMul seed multiplier) addend
+
+getLong :: MaskedBitVec -> MaskedBitVec -> MaskedBitVec
+getLong seed1 seed2 = seedX'
+  where
+    seedX'1 = bitvecTruncate ((seed1 `bitvecLShR` 16) `bitvecLShL` 32) 64
+    seedX'2 = bitvecExtend (seed2 `bitvecLShR` 16) 32 64
+    seedX' = bitvecAdd seedX'1 seedX'2
+
+seedToChunkseed :: Configuration -> MaskedBitVec -> MaskedBitVec
+seedToChunkseed Configuration{seedXsigned, seedZsigned, chunkX, chunkZ} seed = chunkseed
   where
     seed0 = bitvecXor seed multiplier
-    seed1 = bitvecAdd (bitvecMul seed0 multiplier) addend
-    seed2 = bitvecAdd (bitvecMul seed1 multiplier) addend
-    seed3 = bitvecAdd (bitvecMul seed2 multiplier) addend
-    seed4 = bitvecAdd (bitvecMul seed3 multiplier) addend
-    seedX'1 = bitvecTruncate ((seed1 `bitvecLShR` 16) `bitvecLShL` 32) 48
-    seedX'2 = bitvecExtend (seed2 `bitvecLShR` 16) 32 48
-    seedX' = bitvecAdd seedX'1 seedX'2
-    seedX = let x = bitvecOr seedX' (bitVecVal 1) in if seedXsigned then bitvecAdd x (bitVecVal 2) else x
-    seedZ'1 = bitvecTruncate ((seed3 `bitvecLShR` 16) `bitvecLShL` 32) 48
-    seedZ'2 = bitvecExtend (seed4 `bitvecLShR` 16) 32 48
-    seedZ' = bitvecAdd seedZ'1 seedZ'2
-    seedZ = let x = bitvecOr seedZ' (bitVecVal 1) in if seedZsigned then bitvecAdd x (bitVecVal 2) else x
+    seed1 = seedStep seed0
+    seed2 = seedStep seed1
+    seed3 = seedStep seed2
+    seed4 = seedStep seed3
+    seedX' = getLong seed1 seed2
+    seedX'last = (fromRight' $ seedX' 1) == 1
+    seedX = let x = bitvecOr seedX' (bitVecVal 1) in if seedXsigned && seedX'last then bitvecAdd x (bitVecVal 2) else x
+    seedZ'last = (fromRight' $ seedZ' 1) == 1
+    seedZ' = getLong seed3 seed4
+    seedZ = let x = bitvecOr seedZ' (bitVecVal 1) in if seedZsigned && seedZ'last then bitvecAdd x (bitVecVal 2) else x
     a = bitvecMul chunkX seedX
     b = bitvecMul chunkZ seedZ
-    chunkseed = bitvecXor (bitvecAdd a b) seed
+    chunkseed = bitvecTruncate (bitvecXor (bitvecAdd a b) seed) 48
 
 fromRight' :: Either a b -> b
 fromRight' (Right b) = b
 
-seedToChunkseed' :: Integer -> Integer
-seedToChunkseed' seed = fromRight' (seedToChunkseed (bitVecVal seed) 48)
+seedToChunkseed' :: Configuration -> Integer -> Integer
+seedToChunkseed' config seed = fromRight' (seedToChunkseed config (bitVecVal seed) 48)
 
 type Step = Int
 
@@ -131,30 +135,49 @@ type PartialSeed = Integer
 
 type Seed = Integer
 
-crack :: Step -> Chunkseed -> PartialSeed -> Seed
-crack 31 _ seed = seed
-crack step chunkseed seed =
+crack :: Configuration -> Step -> Chunkseed -> PartialSeed -> Seed
+crack config 31 _ seed = seed
+crack config step chunkseed seed =
   let -- predicted last (step + 2) bits of chunkseed, if next bit would be 0
-      chunkseed' = fromRight' $ seedToChunkseed (bitvecTruncate (bitVecVal seed) (17 + step + 1)) (2 + step)
+      chunkseed' = fromRight' $ seedToChunkseed config (bitvecTruncate (bitVecVal seed) (17 + step + 1)) (2 + step)
    in if chunkseed' == limit (2 + step) chunkseed
         then
           -- last bit being 0 worked. let's go with that
-          crack (step + 1) chunkseed seed
+          crack config (step + 1) chunkseed seed
         else
           -- last bit being 0 didn't work. might be 1 (hopefully)
-          crack (step + 1) chunkseed (seed .|. (shiftL 1 (17 + step)))
+          crack config (step + 1) chunkseed (seed .|. (shiftL 1 (17 + step)))
 
-allPossibleSeeds :: [Seed]
-allPossibleSeeds = do
+findAllPossibleSeeds :: Chunkseed -> Integer -> Integer ->  [Seed]
+findAllPossibleSeeds chunkseed chunkX chunkZ = do
   partial <- [0 .. mask 17]
-  let seed = crack 0 45169098967850 partial
-  guard $ seedToChunkseed' seed == 45169098967850
-  return seed
+  seedXsigned <- [True, False]
+  seedZsigned <- [True, False]
+  let config = Configuration {chunkX=bitVecVal chunkX, chunkZ=bitVecVal chunkZ, seedXsigned=seedXsigned, seedZsigned=seedZsigned}
+  let seed = crack config 0 chunkseed partial
+
+  let seed0 = bitvecXor (bitvecTruncate (bitVecVal seed) 48) multiplier
+  let seed1 = seedStep seed0
+  let seed2 = seedStep seed1
+  let seed3 = seedStep seed2
+  let seed4 = seedStep seed3
+
+  let seedX = fromRight' $ getLong seed1 seed2 64
+  let seedZ = fromRight' $ getLong seed3 seed4 64
+  
+  let seedXsigned' = (seedX .&. shiftL 1 63) /= 0
+  let seedZsigned' = (seedZ .&. shiftL 1 63) /= 0
+
+  guard $ seedXsigned' == seedXsigned
+  guard $ seedZsigned' == seedZsigned
+
+  guard $ seedToChunkseed' config seed == chunkseed
+
+  return $ seed
 
 main :: IO ()
 main = do
+  let allPossibleSeeds = findAllPossibleSeeds 235749354401186 15 16
   putStrLn "Cracking..."
   print $ length $ allPossibleSeeds
   print allPossibleSeeds
-
--- 0b11011111111101011010110000001000111001110110011
